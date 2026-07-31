@@ -1,0 +1,11 @@
+title: "Softmax & Scaled Dot-Product Attention (PyTorch)"
+difficulty: medium
+tags: [pytorch, transformers, attention]
+machine:
+  backend: auto
+  image: python:3.11-slim
+  gpu: none          # bump to T4/A100 for the follow-on FlashAttention project
+  cpu: 2
+  memoryMb: 8192
+  pip: [torch]
+  timeoutSec: 600

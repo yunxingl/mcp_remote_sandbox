@@ -1,0 +1,6 @@
+title: "CS336-mini: Language Modeling from Scratch"
+description: "A miniature take on Stanford CS336 — build the core pieces of a language model stack by hand: tokenization, autograd, and attention."
+problems:
+  - bpe-tokenizer
+  - micrograd
+  - attention

@@ -1,0 +1,10 @@
+title: "Micrograd: a Tiny Autograd Engine"
+difficulty: medium
+tags: [autograd, backprop]
+machine:
+  backend: auto
+  image: python:3.11-slim
+  cpu: 1
+  memoryMb: 1024
+  pip: []
+  timeoutSec: 60

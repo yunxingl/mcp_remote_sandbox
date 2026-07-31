@@ -1,0 +1,10 @@
+title: "Byte-Pair Encoding Tokenizer"
+difficulty: easy
+tags: [tokenization, nlp]
+machine:
+  backend: auto
+  image: python:3.11-slim
+  cpu: 1
+  memoryMb: 1024
+  pip: []
+  timeoutSec: 60
