@@ -60,7 +60,7 @@ async function handleMessage(msg: JsonRpcRequest, ctx: McpContext): Promise<obje
           "LabBench: a personal platform for learning ML & systems by implementation. " +
           "Use list_problems/get_problem to see coursework, get_workspace/get_run to inspect the student's code and test results, " +
           "post_hint to leave help in the site's chat sidebar, run_tests to execute the test suite in a sandbox, " +
-          "and assign_task to assign new projects (they appear on the student's dashboard).",
+          "assign_task to assign new projects (they appear on the student's dashboard), and update_task to revise one you assigned.",
       });
     case "ping":
       return rpcResult(id, {});

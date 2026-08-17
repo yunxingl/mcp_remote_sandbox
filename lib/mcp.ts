@@ -291,6 +291,112 @@ export const tools: Record<string, ToolDef> = {
       return { ok: true, key: `assigned/${problem.slug}`, url: `/p/assigned/${problem.slug}` };
     },
   },
+  update_task: {
+    description:
+      "Update a task previously created with assign_task (only DB-backed tasks under the 'assigned' course; " +
+      "file-based course problems are read-only). Every field is optional — only what you pass changes. " +
+      "starter/tests are merged by path into the existing files (pass null as a file's value to delete it, " +
+      "or set replace_files=true to replace the whole map). machine is merged into the existing spec. " +
+      "The student's saved workspace is never modified — starter changes only affect a fresh workspace.",
+    schema: z.object({
+      slug: z.string().regex(/^(assigned\/)?[a-z0-9][a-z0-9-]*$/),
+      title: z.string().min(1).optional(),
+      statement_md: z.string().min(1).optional(),
+      starter: z.record(z.string(), z.string().nullable()).optional(),
+      tests: z.record(z.string(), z.string().nullable()).optional(),
+      replace_files: z.boolean().optional(),
+      machine: MachineSchema,
+      difficulty: z.enum(["easy", "medium", "hard"]).optional(),
+      tags: z.array(z.string()).optional(),
+    }),
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: str("Slug of the assigned task (as given to assign_task), or its key 'assigned/<slug>'"),
+        title: str("New title"),
+        statement_md: str("New multi-part markdown statement (replaces the whole statement)"),
+        starter: {
+          type: "object",
+          description: "Starter files to add/replace, map of path -> contents. A null value deletes that file.",
+          additionalProperties: { type: ["string", "null"] },
+        },
+        tests: {
+          type: "object",
+          description: "Test files to add/replace, map of path -> contents. A null value deletes that file. run_tests.py must remain.",
+          additionalProperties: { type: ["string", "null"] },
+        },
+        replace_files: {
+          type: "boolean",
+          description: "If true, starter/tests given here replace the existing maps entirely instead of merging (default false).",
+        },
+        machine: {
+          type: "object",
+          description: "Partial sandbox machine spec to merge: backend auto|local|modal, image, gpu, cpu, memoryMb, pip (string[]), timeoutSec",
+        },
+        difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
+        tags: { type: "array", items: { type: "string" }, description: "Replaces the tag list" },
+      },
+      required: ["slug"],
+    },
+    handler: async (args, ctx) => {
+      const a = args as {
+        slug: string; title?: string; statement_md?: string;
+        starter?: Record<string, string | null>; tests?: Record<string, string | null>;
+        replace_files?: boolean; machine?: Partial<MachineSpec>;
+        difficulty?: string; tags?: string[];
+      };
+      const user = await mcpUser(ctx);
+      const slug = a.slug.replace(/^assigned\//, "");
+      const existing = await db.problem.findUnique({ where: { courseSlug_slug: { courseSlug: "assigned", slug } } });
+      if (!existing) {
+        throw new McpToolError(
+          `No assigned task with slug '${slug}'. Only tasks created via assign_task can be updated; use list_problems to see them.`
+        );
+      }
+      if (existing.assignedTo && existing.assignedTo !== user.id) {
+        throw new McpToolError(`Task '${slug}' is assigned to a different user.`);
+      }
+
+      const mergeFiles = (current: FileMap, patch?: Record<string, string | null>): FileMap => {
+        if (!patch) return current;
+        const out: FileMap = a.replace_files ? {} : { ...current };
+        for (const [path, contents] of Object.entries(patch)) {
+          if (contents === null) delete out[path];
+          else out[path] = contents;
+        }
+        return out;
+      };
+      const starter = mergeFiles(existing.starter as FileMap, a.starter);
+      const tests = mergeFiles(existing.tests as FileMap, a.tests);
+      if (!("run_tests.py" in tests)) throw new McpToolError("tests must still include run_tests.py after the update.");
+      if (Object.keys(starter).length === 0) throw new McpToolError("starter cannot end up empty.");
+
+      const machine = a.machine
+        ? normalizeMachine({ ...DEFAULT_MACHINE, ...(existing.machine as Partial<MachineSpec>), ...a.machine })
+        : undefined;
+
+      const changed: string[] = [];
+      const data: Record<string, unknown> = {};
+      if (a.title !== undefined) { data.title = a.title; changed.push("title"); }
+      if (a.statement_md !== undefined) { data.statementMd = a.statement_md; changed.push("statement"); }
+      if (a.starter) { data.starter = starter; changed.push("starter"); }
+      if (a.tests) { data.tests = tests; changed.push("tests"); }
+      if (machine) { data.machine = machine as unknown as object; changed.push("machine"); }
+      if (a.difficulty !== undefined) { data.difficulty = a.difficulty; changed.push("difficulty"); }
+      if (a.tags !== undefined) { data.tags = a.tags; changed.push("tags"); }
+      if (changed.length === 0) throw new McpToolError("Nothing to update — pass at least one field besides slug.");
+
+      const problem = await db.problem.update({ where: { id: existing.id }, data });
+      return {
+        ok: true,
+        key: `assigned/${problem.slug}`,
+        url: `/p/assigned/${problem.slug}`,
+        updated: changed,
+        starter_files: Object.keys(starter),
+        test_files: Object.keys(tests),
+      };
+    },
+  },
 };
 
 export async function callTool(name: string, args: unknown, ctx: McpContext = {}): Promise<unknown> {

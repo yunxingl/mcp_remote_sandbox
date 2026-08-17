@@ -31,6 +31,7 @@ and from Claude Code over MCP.
   | `run_tests` | kick off a sandbox run |
   | `post_hint` | drop a hint into the problem's chat sidebar |
   | `assign_task` | assign you a brand-new project (statement + starter + tests), shows up under "Assigned by Claude" |
+  | `update_task` | revise an assigned task — statement, files (merged by path), machine spec, difficulty, tags |
 - **In-site tutor chat** — per-problem Claude chat that sees the statement,
   your files, and your latest test run. MCP hints land in the same thread.
 
