@@ -12,6 +12,11 @@ function allowedEmails(): Set<string> {
   );
 }
 
+/** True if this email is on the ALLOWED_EMAILS allowlist. */
+export function isAllowedEmail(email: string | null | undefined): boolean {
+  return !!email && allowedEmails().has(email.toLowerCase());
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(db),
   session: { strategy: "jwt" },

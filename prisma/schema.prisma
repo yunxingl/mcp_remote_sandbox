@@ -10,9 +10,9 @@ datasource db {
 // ---------- Auth (NextAuth / Auth.js) ----------
 
 model User {
-  id            String    @id @default(cuid())
+  id            String        @id @default(cuid())
   name          String?
-  email         String    @unique
+  email         String        @unique
   emailVerified DateTime?
   image         String?
   accounts      Account[]
@@ -21,7 +21,9 @@ model User {
   runs          Run[]
   chatMessages  ChatMessage[]
   problems      Problem[]
-  createdAt     DateTime  @default(now())
+  oauthCodes    OAuthCode[]
+  oauthTokens   OAuthToken[]
+  createdAt     DateTime      @default(now())
 }
 
 model Account {
@@ -36,7 +38,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-  user              User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([provider, providerAccountId])
 }
@@ -62,16 +64,16 @@ model VerificationToken {
 // File-based content under content/ never touches this table.
 model Problem {
   id          String   @id @default(cuid())
-  courseSlug  String   // e.g. "assigned"
+  courseSlug  String // e.g. "assigned"
   slug        String
   title       String
-  statementMd String   // multi-part markdown problem statement (sidebar)
-  starter     Json     // { "path": "contents", ... }
-  tests       Json     // { "path": "contents", ... } — must include run_tests.py
-  machine     Json     // MachineSpec: { backend, image, gpu, cpu, memoryMb, pip, timeoutSec }
+  statementMd String // multi-part markdown problem statement (sidebar)
+  starter     Json // { "path": "contents", ... }
+  tests       Json // { "path": "contents", ... } — must include run_tests.py
+  machine     Json // MachineSpec: { backend, image, gpu, cpu, memoryMb, pip, timeoutSec }
   difficulty  String   @default("medium")
   tags        String[] @default([])
-  assignedTo  String?  // user id the task was assigned to (null = everyone)
+  assignedTo  String? // user id the task was assigned to (null = everyone)
   user        User?    @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
   createdVia  String   @default("mcp") // "mcp" | "ui"
   createdAt   DateTime @default(now())
@@ -83,8 +85,8 @@ model Problem {
 model Workspace {
   id         String   @id @default(cuid())
   userId     String
-  problemKey String   // "<courseSlug>/<problemSlug>"
-  files      Json     // { "path": "contents", ... }
+  problemKey String // "<courseSlug>/<problemSlug>"
+  files      Json // { "path": "contents", ... }
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   updatedAt  DateTime @updatedAt
   createdAt  DateTime @default(now())
@@ -97,11 +99,11 @@ model Run {
   userId     String
   problemKey String
   status     String    @default("queued") // queued | running | passed | failed | error | timeout
-  backend    String    // local | modal
+  backend    String // local | modal
   machine    Json
-  files      Json      // snapshot of submitted files
+  files      Json // snapshot of submitted files
   logs       String    @default("")
-  results    Json?     // parsed test results: { total, passed, cases: [{name, passed, message}] }
+  results    Json? // parsed test results: { total, passed, cases: [{name, passed, message}] }
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt  DateTime  @default(now())
   finishedAt DateTime?
@@ -114,10 +116,61 @@ model ChatMessage {
   id         String   @id @default(cuid())
   userId     String
   problemKey String
-  role       String   // "user" | "assistant" | "mcp"
+  role       String // "user" | "assistant" | "mcp"
   content    String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
 
   @@index([userId, problemKey, createdAt])
+}
+
+// ---------- OAuth 2.1 authorization server (MCP clients like claude.ai) ----------
+// Clients register themselves (RFC 7591), the user approves on /oauth/authorize
+// (behind Google login), and the resulting bearer tokens unlock /api/mcp.
+// Secrets, codes and tokens are stored as SHA-256 hashes.
+
+model OAuthClient {
+  id                      String       @id // client_id
+  secretHash              String? // null = public client (PKCE only)
+  name                    String?
+  redirectUris            String[]
+  tokenEndpointAuthMethod String       @default("none") // none | client_secret_basic | client_secret_post
+  metadata                Json? // registration request, for reference
+  createdAt               DateTime     @default(now())
+  codes                   OAuthCode[]
+  tokens                  OAuthToken[]
+}
+
+model OAuthCode {
+  codeHash            String      @id
+  clientId            String
+  userId              String
+  redirectUri         String
+  codeChallenge       String
+  codeChallengeMethod String      @default("S256")
+  scope               String?
+  resource            String?
+  expiresAt           DateTime
+  usedAt              DateTime?
+  client              OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt           DateTime    @default(now())
+}
+
+model OAuthToken {
+  id               String      @id @default(cuid())
+  accessTokenHash  String      @unique
+  refreshTokenHash String?     @unique
+  clientId         String
+  userId           String
+  scope            String?
+  resource         String?
+  accessExpiresAt  DateTime
+  refreshExpiresAt DateTime?
+  revokedAt        DateTime?
+  client           OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime    @default(now())
+
+  @@index([userId])
 }

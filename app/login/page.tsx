@@ -1,12 +1,18 @@
 import { redirect } from "next/navigation";
 import { currentUser, signIn } from "@/lib/auth";
 
+/** Only allow same-site relative paths as post-login destinations. */
+function safeCallback(url: string | undefined): string {
+  return url && url.startsWith("/") && !url.startsWith("//") ? url : "/";
+}
+
 export default async function LoginPage(props: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; callbackUrl?: string }>;
 }) {
+  const { error, callbackUrl } = await props.searchParams;
+  const redirectTo = safeCallback(callbackUrl);
   const user = await currentUser();
-  if (user) redirect("/");
-  const { error } = await props.searchParams;
+  if (user) redirect(redirectTo);
 
   return (
     <main className="flex min-h-screen items-center justify-center">
@@ -26,7 +32,7 @@ export default async function LoginPage(props: {
         <form
           action={async () => {
             "use server";
-            await signIn("google", { redirectTo: "/" });
+            await signIn("google", { redirectTo });
           }}
         >
           <button

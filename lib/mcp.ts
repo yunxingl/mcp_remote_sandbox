@@ -5,8 +5,9 @@
 // per-problem chat, and assign brand-new tasks (which appear under the
 // "Assigned by Claude" course).
 //
-// Auth: static bearer token (MCP_TOKEN). The endpoint acts on behalf of the
-// site owner — the first email in ALLOWED_EMAILS.
+// Auth (see app/api/mcp/route.ts): either the static MCP_TOKEN — in which case
+// tools act on behalf of the site owner, the first email in ALLOWED_EMAILS — or
+// an OAuth access token, in which case they act as the user who approved it.
 
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -17,8 +18,18 @@ import { executeRun, resolveBackend } from "@/lib/runner";
 
 export class McpToolError extends Error {}
 
-/** The user MCP acts as: first entry of ALLOWED_EMAILS (must have signed in once). */
-async function mcpUser() {
+/** Per-request context: who the caller is acting as (set by the route). */
+export interface McpContext {
+  userId?: string;
+}
+
+/** The user MCP acts as: the OAuth user if present, else the first ALLOWED_EMAILS entry. */
+async function mcpUser(ctx: McpContext = {}) {
+  if (ctx.userId) {
+    const u = await db.user.findUnique({ where: { id: ctx.userId } });
+    if (!u) throw new McpToolError("The user this token belongs to no longer exists.");
+    return u;
+  }
   const email = (process.env.ALLOWED_EMAILS ?? "").split(",")[0]?.trim().toLowerCase();
   if (!email) throw new McpToolError("ALLOWED_EMAILS is not configured on the server.");
   const user = await db.user.findUnique({ where: { email } });
@@ -48,7 +59,7 @@ interface ToolDef {
   description: string;
   schema: z.ZodTypeAny;
   inputSchema: object; // JSON schema advertised over MCP
-  handler: (args: unknown) => Promise<unknown>;
+  handler: (args: unknown, ctx: McpContext) => Promise<unknown>;
 }
 
 const str = (desc: string) => ({ type: "string", description: desc });
@@ -64,8 +75,8 @@ export const tools: Record<string, ToolDef> = {
       "List all courses and problems on the site, including tasks previously assigned via assign_task.",
     schema: z.object({}).optional(),
     inputSchema: { type: "object", properties: {} },
-    handler: async () => {
-      const user = await mcpUser();
+    handler: async (_args, ctx) => {
+      const user = await mcpUser(ctx);
       const courses = await listCourses(user.id);
       return courses.map((c) => ({
         course: c.slug,
@@ -84,7 +95,7 @@ export const tools: Record<string, ToolDef> = {
       properties: { key: str("Problem key, e.g. 'cs336-mini/bpe-tokenizer'") },
       required: ["key"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const { key } = args as { key: string };
       const p = await getProblemByKey(key);
       if (!p) throw new McpToolError(`problem not found: ${key}`);
@@ -109,9 +120,9 @@ export const tools: Record<string, ToolDef> = {
       properties: { key: str("Problem key") },
       required: ["key"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const { key } = args as { key: string };
-      const user = await mcpUser();
+      const user = await mcpUser(ctx);
       const problem = await getProblemByKey(key);
       if (!problem) throw new McpToolError(`problem not found: ${key}`);
       const [ws, runs] = await Promise.all([
@@ -140,9 +151,9 @@ export const tools: Record<string, ToolDef> = {
       properties: { run_id: str("Run id from get_workspace.recentRuns or run_tests") },
       required: ["run_id"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const { run_id } = args as { run_id: string };
-      const user = await mcpUser();
+      const user = await mcpUser(ctx);
       const run = await db.run.findUnique({ where: { id: run_id } });
       if (!run || run.userId !== user.id) throw new McpToolError(`run not found: ${run_id}`);
       return {
@@ -167,9 +178,9 @@ export const tools: Record<string, ToolDef> = {
       properties: { key: str("Problem key") },
       required: ["key"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const { key } = args as { key: string };
-      const user = await mcpUser();
+      const user = await mcpUser(ctx);
       const problem = await getProblemByKey(key);
       if (!problem) throw new McpToolError(`problem not found: ${key}`);
       const ws = await db.workspace.findUnique({
@@ -201,9 +212,9 @@ export const tools: Record<string, ToolDef> = {
       properties: { key: str("Problem key"), hint: str("Markdown hint text shown in the problem's chat sidebar") },
       required: ["key", "hint"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const { key, hint } = args as { key: string; hint: string };
-      const user = await mcpUser();
+      const user = await mcpUser(ctx);
       if (!(await getProblemByKey(key))) throw new McpToolError(`problem not found: ${key}`);
       const msg = await db.chatMessage.create({
         data: { userId: user.id, problemKey: key, role: "mcp", content: hint },
@@ -245,13 +256,13 @@ export const tools: Record<string, ToolDef> = {
       },
       required: ["slug", "title", "statement_md", "starter", "tests"],
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const a = args as {
         slug: string; title: string; statement_md: string;
         starter: FileMap; tests: FileMap; machine?: Partial<MachineSpec>;
         difficulty?: string; tags?: string[];
       };
-      const user = await mcpUser();
+      const user = await mcpUser(ctx);
       const machine = normalizeMachine({ ...DEFAULT_MACHINE, ...(a.machine ?? {}) });
       const problem = await db.problem.upsert({
         where: { courseSlug_slug: { courseSlug: "assigned", slug: a.slug } },
@@ -282,12 +293,12 @@ export const tools: Record<string, ToolDef> = {
   },
 };
 
-export async function callTool(name: string, args: unknown): Promise<unknown> {
+export async function callTool(name: string, args: unknown, ctx: McpContext = {}): Promise<unknown> {
   const tool = tools[name];
   if (!tool) throw new McpToolError(`unknown tool: ${name}`);
   const parsed = tool.schema.safeParse(args ?? {});
   if (!parsed.success) {
     throw new McpToolError(`invalid arguments: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
-  return tool.handler(parsed.data);
+  return tool.handler(parsed.data, ctx);
 }

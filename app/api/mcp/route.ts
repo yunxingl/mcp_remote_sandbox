@@ -1,14 +1,19 @@
 // Shared MCP endpoint (Streamable HTTP, stateless JSON mode).
 //
-// Connect from Claude Code:
-//   claude mcp add --transport http labbench https://<your-site>/api/mcp \
-//     --header "Authorization: Bearer $MCP_TOKEN"
+// Two ways in:
+//   1. Static token (Claude Code, scripts):
+//        claude mcp add --transport http labbench https://<your-site>/api/mcp \
+//          --header "Authorization: Bearer $MCP_TOKEN"
+//   2. OAuth 2.1 (claude.ai, Claude Desktop, MCP Inspector, ...): just give the
+//      client the URL; it discovers /.well-known/oauth-*, registers, and sends
+//      the user through /oauth/authorize (Google login + consent).
 //
 // Implements the subset of MCP that stateless tool servers need:
 // initialize, ping, tools/list, tools/call. Notifications get 202.
 
 import { NextResponse } from "next/server";
-import { callTool, McpToolError, tools } from "@/lib/mcp";
+import { callTool, McpContext, McpToolError, tools } from "@/lib/mcp";
+import { CORS_HEADERS, preflight, publicOrigin, safeEqual, verifyAccessToken, wwwAuthenticate } from "@/lib/oauth";
 
 export const maxDuration = 300; // allow slow sandbox runs via run_tests
 
@@ -29,14 +34,18 @@ function rpcError(id: string | number | null, code: number, message: string) {
   return { jsonrpc: "2.0" as const, id, error: { code, message } };
 }
 
-function authorized(req: Request): boolean {
-  const token = process.env.MCP_TOKEN;
-  if (!token) return false;
-  const header = req.headers.get("authorization") ?? "";
-  return header === `Bearer ${token}`;
+/** Returns the caller context, or null if the bearer token is missing/invalid. */
+async function authenticate(req: Request): Promise<McpContext | null> {
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.get("authorization") ?? "");
+  if (!m) return null;
+  const token = m[1].trim();
+  const staticToken = process.env.MCP_TOKEN;
+  if (staticToken && safeEqual(token, staticToken)) return {}; // acts as site owner
+  const oauth = await verifyAccessToken(token);
+  return oauth ? { userId: oauth.userId } : null;
 }
 
-async function handleMessage(msg: JsonRpcRequest): Promise<object | null> {
+async function handleMessage(msg: JsonRpcRequest, ctx: McpContext): Promise<object | null> {
   const id = msg.id ?? null;
   // Notifications (no id) get no response body.
   if (msg.id === undefined || msg.method.startsWith("notifications/")) return null;
@@ -67,7 +76,7 @@ async function handleMessage(msg: JsonRpcRequest): Promise<object | null> {
       const name = String(msg.params?.name ?? "");
       const args = msg.params?.arguments;
       try {
-        const result = await callTool(name, args);
+        const result = await callTool(name, args, ctx);
         return rpcResult(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         });
@@ -88,8 +97,16 @@ async function handleMessage(msg: JsonRpcRequest): Promise<object | null> {
 }
 
 export async function POST(req: Request) {
-  if (!authorized(req)) {
-    return NextResponse.json(rpcError(null, -32001, "unauthorized"), { status: 401 });
+  const ctx = await authenticate(req);
+  if (!ctx) {
+    const hasHeader = !!req.headers.get("authorization");
+    return NextResponse.json(rpcError(null, -32001, "unauthorized"), {
+      status: 401,
+      headers: {
+        ...CORS_HEADERS,
+        "WWW-Authenticate": wwwAuthenticate(publicOrigin(req.headers), hasHeader ? "invalid_token" : undefined),
+      },
+    });
   }
   let body: unknown;
   try {
@@ -99,11 +116,15 @@ export async function POST(req: Request) {
   }
 
   const messages = Array.isArray(body) ? (body as JsonRpcRequest[]) : [body as JsonRpcRequest];
-  const responses = (await Promise.all(messages.map(handleMessage))).filter((r) => r !== null);
+  const responses = (await Promise.all(messages.map((m) => handleMessage(m, ctx)))).filter((r) => r !== null);
 
-  if (responses.length === 0) return new Response(null, { status: 202 });
+  if (responses.length === 0) return new Response(null, { status: 202, headers: CORS_HEADERS });
   const payload = Array.isArray(body) ? responses : responses[0];
-  return NextResponse.json(payload);
+  return NextResponse.json(payload, { headers: CORS_HEADERS });
+}
+
+export async function OPTIONS() {
+  return preflight();
 }
 
 // No server-initiated stream in stateless mode.

@@ -22,7 +22,8 @@ and from Claude Code over MCP.
     per-problem machine specs — image, cpu, memory, **GPUs** (T4…H100), and
     pip packages like `torch`
 - **Google login, allowlist-only** — only emails in `ALLOWED_EMAILS` can sign in.
-- **One shared MCP endpoint** (`/api/mcp`) for Claude Code:
+- **One shared MCP endpoint** (`/api/mcp`) for Claude Code *and* claude.ai
+  (built-in OAuth 2.1 server, so it works as a claude.ai custom connector):
   | tool | what it does |
   | --- | --- |
   | `list_problems` / `get_problem` | browse all coursework |
@@ -63,7 +64,8 @@ Optional:
    enables cloud sandboxes with GPUs and pip installs. With
    `RUNNER_BACKEND=auto`, problems run on Modal when it's configured and
    locally otherwise; per-problem `machine.backend` overrides.
-6. **`MCP_TOKEN`** — `openssl rand -hex 32`; required for the MCP endpoint.
+6. **`MCP_TOKEN`** — `openssl rand -hex 32`; static bearer token for the MCP
+   endpoint (used by Claude Code). OAuth clients like claude.ai don't need it.
 
 ### Deploying (Vercel)
 
@@ -87,8 +89,22 @@ Then, in any Claude Code session:
   `assign_task`; the task appears on your dashboard under **Assigned by
   Claude**, complete with starter files and tests.
 
-The MCP server acts on behalf of the first email in `ALLOWED_EMAILS` (sign in
-once on the site before using MCP so the user row exists).
+With the static token, the MCP server acts on behalf of the first email in
+`ALLOWED_EMAILS` (sign in once on the site before using MCP so the user row
+exists).
+
+### Connecting claude.ai / Claude Desktop (OAuth)
+
+The app is also an OAuth 2.1 authorization server implementing the
+[MCP authorization spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+— discovery (`/.well-known/oauth-authorization-server`,
+`/.well-known/oauth-protected-resource`), dynamic client registration
+(`/api/oauth/register`), PKCE, refresh-token rotation and revocation. Login is
+the site's Google sign-in, so only allowlisted emails can approve a client.
+
+In claude.ai: **Settings → Connectors → Add custom connector**, paste
+`https://<your-domain>/api/mcp`, and approve on the consent screen. Tools then
+act as *you* (the user who approved), not the `ALLOWED_EMAILS` default.
 
 ## Authoring courses
 
