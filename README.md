@@ -55,7 +55,9 @@ You need:
 
 Optional:
 
-4. **Anthropic** — `ANTHROPIC_API_KEY` enables the in-site tutor chat.
+4. **OpenRouter** — `OPENROUTER_KEY` (from [openrouter.ai/keys](https://openrouter.ai/keys))
+   enables the in-site tutor chat; `OPENROUTER_MODEL` picks the model
+   (any OpenRouter id, e.g. `anthropic/claude-sonnet-4.5`).
 5. **Modal** — `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET`
    (from [modal.com/settings/tokens](https://modal.com/settings/tokens))
    enables cloud sandboxes with GPUs and pip installs. With
@@ -116,7 +118,7 @@ installs `torch`; give it a GPU by editing `problem.yaml`).
 
 ## Architecture notes
 
-- Next.js 15 App Router + Prisma/Postgres + NextAuth v5 (Google, JWT sessions).
+- Next.js 15 App Router + Prisma/Postgres + NextAuth v5 (Google, JWT sessions). Tutor chat via OpenRouter.
 - File-based content is read fresh from disk per request — edit markdown,
   refresh. DB-backed problems (from `assign_task`) merge into the same catalog
   under the virtual `assigned` course.

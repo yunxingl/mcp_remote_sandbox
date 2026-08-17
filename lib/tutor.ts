@@ -1,14 +1,14 @@
-// The in-site tutor: per-problem chat backed by the Anthropic API.
+// The in-site tutor: per-problem chat backed by OpenRouter (OpenAI-compatible API).
 // MCP hints posted from Claude Code land in the same thread (role "mcp").
 
-import Anthropic from "@anthropic-ai/sdk";
 import { db } from "@/lib/db";
 import { ProblemDetail, FileMap, TestResults } from "@/lib/types";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.5";
 
 export function tutorConfigured(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return !!process.env.OPENROUTER_KEY;
 }
 
 function systemPrompt(problem: ProblemDetail, files: FileMap, lastRun?: { status: string; logs: string; results: TestResults | null }) {
@@ -30,6 +30,38 @@ ${fileDump || "(no files yet)"}
 ${lastRun ? `# Latest test run (${lastRun.status})\n\n${lastRun.logs.slice(0, 8000)}` : ""}`;
 }
 
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+async function openrouterChat(messages: ChatMessage[]): Promise<string> {
+  const resp = await fetch(OPENROUTER_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENROUTER_KEY}`,
+      "Content-Type": "application/json",
+      // Optional attribution headers shown on openrouter.ai rankings.
+      "HTTP-Referer": process.env.NEXTAUTH_URL || process.env.AUTH_URL || "https://labbench.local",
+      "X-Title": "LabBench",
+    },
+    // Generous budget: reasoning models (DeepSeek, o-series, etc.) spend tokens thinking first.
+    body: JSON.stringify({ model: MODEL, max_tokens: 4096, messages }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`OpenRouter ${resp.status}: ${body.slice(0, 500)}`);
+  }
+  const data = (await resp.json()) as {
+    choices?: { message?: { content?: string | { type: string; text?: string }[] } }[];
+    error?: { message?: string };
+  };
+  if (data.error) throw new Error(`OpenRouter: ${data.error.message}`);
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
+  }
+  return "";
+}
+
 export async function tutorReply(
   userId: string,
   problem: ProblemDetail,
@@ -42,7 +74,7 @@ export async function tutorReply(
 
   if (!tutorConfigured()) {
     const msg =
-      "Tutor chat is not configured (set ANTHROPIC_API_KEY). " +
+      "Tutor chat is not configured (set OPENROUTER_KEY). " +
       "You can still get help through the MCP integration from Claude Code.";
     await db.chatMessage.create({ data: { userId, problemKey: key, role: "assistant", content: msg } });
     return msg;
@@ -62,27 +94,24 @@ export async function tutorReply(
   ]);
 
   const files = (ws?.files as FileMap | undefined) ?? problem.starter;
-  const messages: Anthropic.MessageParam[] = history.map((m) => ({
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.role === "mcp" ? `[hint sent from Claude Code via MCP]\n${m.content}` : m.content,
-  }));
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: systemPrompt(problem, files, lastRun ? {
+        status: lastRun.status,
+        logs: lastRun.logs,
+        results: (lastRun.results as TestResults | null) ?? null,
+      } : undefined),
+    },
+    ...history.map((m): ChatMessage => ({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.role === "mcp" ? `[hint sent from Claude Code via MCP]\n${m.content}` : m.content,
+    })),
+  ];
 
-  const client = new Anthropic();
-  const resp = await client.messages.create({
-    model: MODEL,
-    max_tokens: 2048,
-    system: systemPrompt(problem, files, lastRun ? {
-      status: lastRun.status,
-      logs: lastRun.logs,
-      results: (lastRun.results as TestResults | null) ?? null,
-    } : undefined),
-    messages,
-  });
-
-  const text = resp.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
+  const text =
+    (await openrouterChat(messages)).trim() ||
+    "(The model returned an empty reply — try again or pick a different OPENROUTER_MODEL.)";
   await db.chatMessage.create({ data: { userId, problemKey: key, role: "assistant", content: text } });
   return text;
 }

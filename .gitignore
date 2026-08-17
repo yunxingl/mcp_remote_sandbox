@@ -23,3 +23,9 @@ prisma/generated/
 .pgdata/
 .runs/
 tsconfig.tsbuildinfo
+
+# supabase agent-skills local artifacts
+.agents/
+supabase/
+skills-lock.json
+.postgres_server_info

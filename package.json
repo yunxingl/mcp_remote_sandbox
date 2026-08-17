@@ -14,7 +14,6 @@
     "content:check": "tsx scripts/check-content.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.65.0",
     "@auth/prisma-adapter": "^2.10.0",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "@monaco-editor/react": "^4.7.0",
